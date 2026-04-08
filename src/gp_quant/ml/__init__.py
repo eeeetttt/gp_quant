@@ -1,14 +1,18 @@
 """
 机器学习模块
 """
-from .model import QuantNNModel
-from .trainer import ModelTrainer
+from .model import QuantClassifier, QuantRegressor, ModelConfig
+from .trainer import ModelTrainer, TrainConfig
 from .predictor import ModelPredictor
-from .features import FeatureEngineer
+from .features import FeatureEngineer, FeatureConfig
 
 __all__ = [
-    "QuantNNModel",
+    "QuantClassifier",
+    "QuantRegressor",
+    "ModelConfig",
     "ModelTrainer",
+    "TrainConfig",
     "ModelPredictor",
     "FeatureEngineer",
+    "FeatureConfig",
 ]

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python temp/test_full.py)",
+      "Bash(python -c \"import sys; print\\(sys.path\\)\")",
+      "Bash(python temp/test_data.py)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, 'src'\\); from gp_quant.strategy.indicators import TechnicalIndicators; print\\('OK'\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,2 @@
+[console_scripts]
+gp-quant = cli.main:main
