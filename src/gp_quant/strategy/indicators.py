@@ -320,18 +320,15 @@ class TechnicalIndicators:
         tr3 = abs(low - close.shift(1))
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-        # Directional Movement
+        # Directional Movement (vectorized)
         up_move = high - high.shift(1)
         down_move = low.shift(1) - low
 
-        plus_dm = pd.Series(0, index=df.index)
-        minus_dm = pd.Series(0, index=df.index)
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
 
-        for i in range(1, len(df)):
-            if up_move[i] > down_move[i] and up_move[i] > 0:
-                plus_dm[i] = up_move[i]
-            if down_move[i] > up_move[i] and down_move[i] > 0:
-                minus_dm[i] = down_move[i]
+        plus_dm = pd.Series(plus_dm, index=df.index)
+        minus_dm = pd.Series(minus_dm, index=df.index)
 
         # EMA of TR, +DM, -DM
         atr_14 = tr.ewm(span=14).mean()
@@ -505,8 +502,8 @@ class TechnicalIndicators:
         raw_money_flow = tp * df["volume"]
 
         condition = raw_money_flow > raw_money_flow.shift(1)
-        positive_flow = np.where(condition, raw_money_flow, 0)
-        negative_flow = np.where(~condition, raw_money_flow, 0)
+        positive_flow = pd.Series(np.where(condition, raw_money_flow, 0), index=df.index)
+        negative_flow = pd.Series(np.where(~condition, raw_money_flow, 0), index=df.index)
 
         mfi_14 = positive_flow.rolling(window=14).sum() / negative_flow.rolling(window=14).sum()
         df["mfi"] = 100 - (100 / (1 + mfi_14))

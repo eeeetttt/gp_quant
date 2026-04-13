@@ -13,6 +13,13 @@ from .backtest.engine import BacktestEngine, Trade, Portfolio
 from .ml.features import FeatureEngineer, FeatureConfig
 from .ml.trainer import ModelTrainer, TrainConfig
 from .ml.predictor import ModelPredictor
+from .harness.engine import (
+    HarnessEngine,
+    RiskConfig,
+    ScheduleConfig,
+    FixedFractionSizer,
+    PaperExecutionEngine,
+)
 
 __all__ = [
     # 数据模块
@@ -38,4 +45,11 @@ __all__ = [
     "ModelTrainer",
     "TrainConfig",
     "ModelPredictor",
+
+    # 交易调度模块
+    "HarnessEngine",
+    "RiskConfig",
+    "ScheduleConfig",
+    "FixedFractionSizer",
+    "PaperExecutionEngine",
 ]

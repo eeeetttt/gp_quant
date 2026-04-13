@@ -50,15 +50,15 @@ class FeatureEngineer:
         """
         df = data.copy()
 
-        # 价格特征
-        if self.config.use_price_features:
-            df = self._create_price_features(df)
-
-        # 技术指标特征
+        # 技术指标特征 (must come first — price features reference bb_upper/bb_lower)
         if self.config.use_technical_indicators:
             from ..strategy.indicators import TechnicalIndicators
             indicators = TechnicalIndicators(df)
             df = indicators.get_all_indicators()
+
+        # 价格特征
+        if self.config.use_price_features:
+            df = self._create_price_features(df)
 
         # 滞后特征
         if self.config.use_lag_features:
@@ -72,65 +72,71 @@ class FeatureEngineer:
             df = df.dropna()
 
         # 提取特征列
-        self.feature_columns = [col for col in df.columns if col not in [self.config.target_column]]
+        self.feature_columns = [col for col in df.columns if col not in [self.config.target_column, f"target_direction_{self.config.target_horizon}d"]]
 
         return df
 
     def _create_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """创建价格相关特征"""
+        df = df.copy()
         # 收益率
-        df["return_1d"] = df["close"].pct_change(1)
-        df["return_5d"] = df["close"].pct_change(5)
-        df["return_10d"] = df["close"].pct_change(10)
+        df.loc[:, "return_1d"] = df["close"].pct_change(1)
+        df.loc[:, "return_5d"] = df["close"].pct_change(5)
+        df.loc[:, "return_10d"] = df["close"].pct_change(10)
 
         # 价格位置
-        df["price_ma_ratio"] = df["close"] / df["close"].rolling(20).mean()
-        df["price_bb_position"] = (df["close"] - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"])
+        df.loc[:, "price_ma_ratio"] = df["close"] / df["close"].rolling(20).mean()
+
+        # 布林带位置 (only if bollinger bands already calculated)
+        if "bb_upper" in df.columns and "bb_lower" in df.columns:
+            df.loc[:, "price_bb_position"] = (df["close"] - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"])
 
         # 波动率
-        df["volatility_5d"] = df["return_1d"].rolling(5).std()
-        df["volatility_10d"] = df["return_1d"].rolling(10).std()
+        df.loc[:, "volatility_5d"] = df["return_1d"].rolling(5).std()
+        df.loc[:, "volatility_10d"] = df["return_1d"].rolling(10).std()
 
         # 价格区间
-        df["range_pct"] = (df["high"] - df["low"]) / df["close"]
+        df.loc[:, "range_pct"] = (df["high"] - df["low"]) / df["close"]
 
         # 跳空
-        df["gap"] = df["open"] - df["close"].shift(1)
-        df["gap_pct"] = df["gap"] / df["close"].shift(1)
+        df.loc[:, "gap"] = df["open"] - df["close"].shift(1)
+        df.loc[:, "gap_pct"] = df["gap"] / df["close"].shift(1)
 
         return df
 
     def _create_lag_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """创建滞后特征"""
+        df = df.copy()
         # 价格滞后
         for lag in [1, 2, 3, 5]:
-            df[f"close_lag_{lag}"] = df["close"].shift(lag)
-            df[f"return_lag_{lag}"] = df["return_1d"].shift(lag)
-            df[f"volume_lag_{lag}"] = df["volume"].shift(lag)
+            df.loc[:, f"close_lag_{lag}"] = df["close"].shift(lag)
+            df.loc[:, f"return_lag_{lag}"] = df["return_1d"].shift(lag)
+            df.loc[:, f"volume_lag_{lag}"] = df["volume"].shift(lag)
 
         # 指标滞后
         if "rsi" in df.columns:
-            df["rsi_lag_1"] = df["rsi"].shift(1)
-            df["rsi_lag_5"] = df["rsi"].shift(5)
+            df.loc[:, "rsi_lag_1"] = df["rsi"].shift(1)
+            df.loc[:, "rsi_lag_5"] = df["rsi"].shift(5)
 
         if "macd" in df.columns:
-            df["macd_lag_1"] = df["macd"].shift(1)
-            df["macd_signal_lag_1"] = df["signal"].shift(1)
+            df.loc[:, "macd_lag_1"] = df["macd"].shift(1)
+            df.loc[:, "macd_signal_lag_1"] = df["signal"].shift(1)
 
         if "volatility" in df.columns:
-            df["volatility_lag_1"] = df["volatility"].shift(1)
+            df.loc[:, "volatility_lag_1"] = df["volatility"].shift(1)
 
         return df
 
     def _create_target(self, df: pd.DataFrame) -> pd.DataFrame:
         """创建目标变量（未来收益率）"""
+        df = df.copy()
         horizon = self.config.target_horizon
 
         # 未来 N 日收益率
-        df[f"target_{horizon}d"] = df["close"].pct_change(horizon)
+        df.loc[:, f"target_{horizon}d"] = df["close"].pct_change(horizon)
 
         # 方向标签 (0: 下跌，1: 上涨)
-        df[f"target_direction_{horizon}d"] = (df[f"target_{horizon}d"] > 0).astype(int)
+        df.loc[:, f"target_direction_{horizon}d"] = (df[f"target_{horizon}d"] > 0).astype(int)
 
         return df
 
@@ -144,8 +150,12 @@ class FeatureEngineer:
         Returns:
             (X, y) 特征和目标数组
         """
-        # 排除目标列
-        feature_cols = [col for col in df.columns if col != self.config.target_column]
+        # Only use numeric columns, exclude target and non-numeric
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        exclude = {self.config.target_column, f"target_direction_{self.config.target_horizon}d"}
+        feature_cols = [c for c in numeric_cols if c not in exclude]
+        self.feature_columns = feature_cols
+
         X = df[feature_cols].values
         y = df[self.config.target_column].values
 
@@ -172,21 +182,23 @@ class FeatureEngineer:
 
         return X_train_scaled, X_test_scaled
 
-    def apply_pca(self, X_train: np.ndarray, n_components: int = 50) -> Tuple[np.ndarray, np.ndarray]:
+    def apply_pca(self, X_train: np.ndarray, X_test: np.ndarray, n_components: int = 50) -> Tuple[np.ndarray, np.ndarray]:
         """
         PCA 降维
 
         Args:
             X_train: 训练集特征
+            X_test: 测试集特征
             n_components: 降维后维度
 
         Returns:
             (pca_X_train, pca_X_test)
         """
-        self.pca = PCA(n_components=n_components)
+        self.pca = PCA(n_components=min(n_components, X_train.shape[1]))
         X_train_pca = self.pca.fit_transform(X_train)
+        X_test_pca = self.pca.transform(X_test)
 
-        return X_train_pca
+        return X_train_pca, X_test_pca
 
     def get_feature_importance(self, model: Any) -> Dict[str, float]:
         """

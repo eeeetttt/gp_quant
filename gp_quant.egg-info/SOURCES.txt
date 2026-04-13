@@ -1,8 +1,0 @@
-README.md
-setup.py
-gp_quant.egg-info/PKG-INFO
-gp_quant.egg-info/SOURCES.txt
-gp_quant.egg-info/dependency_links.txt
-gp_quant.egg-info/entry_points.txt
-gp_quant.egg-info/requires.txt
-gp_quant.egg-info/top_level.txt

@@ -1,6 +1,8 @@
 """
 模型训练模块
 """
+from __future__ import annotations
+
 import numpy as np
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field

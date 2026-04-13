@@ -88,30 +88,37 @@ class AkShareFetcher(DataFetcher):
         return df.reset_index(drop=True)
 
     def fetch_quote(self, symbol: str) -> Dict[str, Any]:
-        """获取实时报价"""
+        """获取实时报价 - 使用单只股票接口避免全市场扫描"""
         try:
-            df = self.ak.stock_zh_a_spot_em()
-            stock_info = df[df["代码"] == symbol]
+            sec_id = self.ak.stock_individual_info_em(symbol=symbol)
+            info = sec_id.iloc[0]
+            name = info["value"] if "value" in info.index else ""
 
-            if len(stock_info) > 0:
-                info = stock_info.iloc[0]
-                return {
-                    "symbol": symbol,
-                    "name": info.get("名称", ""),
-                    "current_price": float(info.get("最新价", 0)),
-                    "previous_close": float(info.get("昨收", 0)),
-                    "day_high": float(info.get("最高", 0)),
-                    "day_low": float(info.get("最低", 0)),
-                    "volume": int(info.get("成交量", 0)),
-                    "amount": float(info.get("成交额", 0)),
-                    "change_pct": float(info.get("涨跌幅", 0)),
-                    "turnover": float(info.get("换手", 0)),
-                    "timestamp": datetime.now().isoformat()
-                }
+            # Fetch only this stock's latest daily data for quote info
+            hist = self.ak.stock_zh_a_hist(
+                symbol=symbol, period="daily", adjust="qfq"
+            )
+            if hist.empty:
+                return {"error": "No data for symbol"}
+
+            latest = hist.iloc[-1]
+            prev = hist.iloc[-2] if len(hist) > 1 else latest
+
+            return {
+                "symbol": symbol,
+                "name": name,
+                "current_price": float(latest.get("收盘", 0)),
+                "previous_close": float(prev.get("收盘", 0)),
+                "day_high": float(latest.get("最高", 0)),
+                "day_low": float(latest.get("最低", 0)),
+                "volume": int(latest.get("成交量", 0)),
+                "amount": float(latest.get("成交额", 0)),
+                "change_pct": float(latest.get("涨跌幅", 0)),
+                "turnover": float(latest.get("换手", 0)),
+                "timestamp": datetime.now().isoformat(),
+            }
         except Exception:
-            pass
-
-        return {"error": "Unable to fetch real-time quote"}
+            return {"error": "Unable to fetch real-time quote"}
 
 
 class LocalDataFetcher(DataFetcher):

@@ -63,7 +63,7 @@ class StockDataProcessor(DataProcessor):
         # 删除删除无效数据
         df = df[df["range_pct"] < 100]  # 排除极端异常值
 
-        return df.reset_index()
+        return df.reset_index(drop=True)
 
     def normalize(self, data: pd.DataFrame, method: str = "minmax") -> pd.DataFrame:
         """
@@ -118,49 +118,20 @@ class StockDataProcessor(DataProcessor):
 
     def generate_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        生成特征
+        生成特征（复用 TechnicalIndicators 避免重复实现）
 
         Returns:
             包含特征工程的结果
         """
         df = data.copy()
 
-        # 移动平均线
-        df["ma5"] = df["close"].rolling(window=5).mean()
-        df["ma10"] = df["close"].rolling(window=10).mean()
-        df["ma20"] = df["close"].rolling(window=20).mean()
-        df["ma60"] = df["close"].rolling(window=60).mean()
+        # 使用 TechnicalIndicators 统一计算技术指标
+        from ..strategy.indicators import TechnicalIndicators
+        ti = TechnicalIndicators(df)
+        df = ti.get_all_indicators()
 
-        # MACD
-        exp1 = df["close"].ewm(span=12, adjust=False).mean()
-        exp2 = df["close"].ewm(span=26, adjust=False).mean()
-        df["macd"] = exp1 - exp2
-        df["signal"] = df["macd"].ewm(span=9, adjust=False).mean()
-        df["histogram"] = df["macd"] - df["signal"]
-
-        # RSI
-        delta = df["close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df["rsi"] = 100 - (100 / (1 + rs))
-
-        # 布林带
-        df["bb_middle"] = df["close"].rolling(window=20).mean()
-        bb_std = df["close"].rolling(window=20).std()
-        df["bb_upper"] = df["bb_middle"] + (bb_std * 2)
-        df["bb_lower"] = df["bb_middle"] - (bb_std * 2)
-        df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_middle"]
-
-        # 波动率
-        df["volatility"] = df["change"].rolling(window=20).std()
-
-        # 成交量相关
-        df["vol_ma5"] = df["volume"].rolling(window=5).mean()
-        df["vol_ratio"] = df["volume"] / df["vol_ma5"]
-
-        # 去除 NaN 值
-        df = df.dropna()
+        # 计算多周期收益率
+        df = self.calculate_returns(df)
 
         return df
 

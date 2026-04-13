@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+
+# Data & models (generated locally)
+data/
+models/
+
+# Experiment data (large CSVs)
+experiments/data/*.csv
+experiments/data/cleaned/
+experiments/data/indicators/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Claude Code settings (personal)
+.claude/settings.local.json
+
+# Environment
+.env
+
+# Test temp files
+temp/*.csv
+temp/*.json
+
+# Coverage
+.coverage
+htmlcov/

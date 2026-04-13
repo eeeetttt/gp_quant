@@ -9,6 +9,8 @@ from datetime import datetime
 import json
 import os
 
+from ..strategy.base import Strategy, Signal
+
 
 @dataclass
 class Trade:
@@ -131,6 +133,24 @@ class BacktestEngine:
         """设置交易信号"""
         self.signals = signals.copy()
 
+    def set_strategy(self, strategy: Strategy):
+        """设置策略对象，自动生成信号"""
+        self._strategy = strategy
+
+    def _generate_signals_from_strategy(self):
+        """使用 Strategy 对象生成信号列"""
+        if not hasattr(self, '_strategy') or self.market_data is None:
+            return
+        df = self.market_data.copy()
+        signal_map = {Signal.BUY: "BUY", Signal.SELL: "SELL", Signal.HOLD: "HOLD"}
+        # 逐行生成信号
+        signals = []
+        for i in range(len(df)):
+            signal = self._strategy.generate_signal(df.iloc[: i + 1])
+            signals.append(signal_map.get(signal, "HOLD"))
+        df["signal"] = signals
+        self.signals = df
+
     def run(self) -> Dict[str, Any]:
         """
         运行回测
@@ -140,6 +160,10 @@ class BacktestEngine:
         """
         if self.market_data is None:
             raise ValueError("Market data not set")
+
+        # 如果设置了 Strategy 但未设置 signals，自动生成
+        if self.signals is None and hasattr(self, "_strategy"):
+            self._generate_signals_from_strategy()
 
         if self.signals is None:
             raise ValueError("Signals not set")
@@ -190,12 +214,16 @@ class BacktestEngine:
         if symbol in self.portfolio.positions:
             # 平仓
             position = self.portfolio.positions[symbol]
-            pnl = position.close(current_price, exit_signal=signal)
-            self.portfolio.current_capital += position.exit_price * position.quantity * (1 - self.fee_rate) + pnl
+            position.close(current_price, exit_signal=signal)
+            # Add sale proceeds (minus exit fees) back to capital
+            exit_fees = position.exit_price * position.quantity * self.fee_rate
+            self.portfolio.current_capital += position.exit_price * position.quantity - exit_fees
             del self.portfolio.positions[symbol]
         elif signal == "BUY" and self.portfolio.current_capital > current_price:
             # 开仓
-            quantity = min(self.portfolio.current_capital * 0.9 / current_price, 10000)
+            quantity = int(self.portfolio.current_capital * 0.9 / current_price / 100) * 100  # round down to lot size
+            if quantity <= 0:
+                return
             fees = quantity * current_price * self.fee_rate
 
             trade = Trade(
@@ -207,7 +235,7 @@ class BacktestEngine:
                 fees=fees
             )
 
-            self.portfolio.current_capital -= quantity * current_price * (1 + self.fee_rate)
+            self.portfolio.current_capital -= quantity * current_price + fees
             self.portfolio.positions[symbol] = trade
             self.portfolio.add_trade(trade)
 

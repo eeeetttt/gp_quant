@@ -12,11 +12,45 @@ try:
     import torch.optim as optim
     from torch.utils.data import DataLoader, TensorDataset
     TORCH_AVAILABLE = True
+
+    class _QuantNeuralNetwork(nn.Module):
+        """Internal neural network implementation (only defined when torch available)"""
+
+        def __init__(
+            self,
+            input_dim: int,
+            hidden_layers: list[int] = None,
+            dropout_rate: float = 0.3,
+            is_regression: bool = False,
+        ):
+            super().__init__()
+            self.is_regression = is_regression
+            self.hidden_layers = hidden_layers or [128, 64, 32]
+
+            layers = []
+            prev_dim = input_dim
+
+            for hidden_dim in self.hidden_layers:
+                layers.append(nn.Linear(prev_dim, hidden_dim))
+                layers.append(nn.ReLU())
+                layers.append(nn.Dropout(dropout_rate))
+                prev_dim = hidden_dim
+
+            if is_regression:
+                layers.append(nn.Linear(prev_dim, 1))
+            else:
+                layers.append(nn.Linear(prev_dim, 2))
+
+            self.network = nn.Sequential(*layers)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.network(x)
 except ImportError:
     TORCH_AVAILABLE = False
+    _QuantNeuralNetwork = None  # type: ignore
 
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
@@ -235,92 +269,25 @@ class QuantRegressor(BaseEstimator, RegressorMixin):
         return self.model.predict(X)
 
 
-class QuantNeuralNetwork(nn.Module):
-    """神经网络模型"""
+class QuantNeuralNetwork:
+    """Standalone neural network wrapper (requires torch).
+    Exposed for backward compatibility; delegates to internal _QuantNeuralNetwork."""
 
     def __init__(
         self,
         input_dim: int,
         hidden_layers: List[int] = None,
         dropout_rate: float = 0.3,
-        is_regression: bool = False
+        is_regression: bool = False,
     ):
-        super().__init__()
-        self.is_regression = is_regression
-        self.hidden_layers = hidden_layers or [128, 64, 32]
-
-        layers = []
-        prev_dim = input_dim
-
-        for hidden_dim in self.hidden_layers:
-            layers.append(nn.Linear(prev_dim, hidden_dim))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(dropout_rate))
-            prev_dim = hidden_dim
-
-        if is_regression:
-            layers.append(nn.Linear(prev_dim, 1))
-        else:
-            layers.append(nn.Linear(prev_dim, 2))
-
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
-
-    def fit(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        epochs: int = 100,
-        batch_size: int = 32,
-        learning_rate: float = 0.001
-    ):
-        """训练模型"""
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch is not installed")
+        self._model = _QuantNeuralNetwork(
+            input_dim=input_dim,
+            hidden_layers=hidden_layers,
+            dropout_rate=dropout_rate,
+            is_regression=is_regression,
+        )
 
-        X_tensor = torch.FloatTensor(X)
-        y_tensor = torch.FloatTensor(y) if self.is_regression else torch.LongTensor(y)
-
-        criterion = nn.CrossEntropyLoss() if not self.is_regression else nn.MSELoss()
-        optimizer = optim.Adam(self.parameters(), lr=learning_rate)
-
-        dataset = TensorDataset(X_tensor, y_tensor)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-        self.train()
-        for epoch in range(epochs):
-            total_loss = 0
-            for batch_X, batch_y in dataloader:
-                optimizer.zero_grad()
-                outputs = self(batch_X)
-
-                if not self.is_regression:
-                    loss = criterion(outputs, batch_y)
-                else:
-                    loss = criterion(outputs.squeeze(), batch_y)
-
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
-
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader):.4f}")
-
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        """预测"""
-        if not TORCH_AVAILABLE:
-            raise ImportError("PyTorch is not installed")
-
-        self.eval()
-        X_tensor = torch.FloatTensor(X)
-
-        with torch.no_grad():
-            outputs = self(X_tensor)
-
-            if not self.is_regression:
-                _, predicted = torch.max(outputs, 1)
-                return predicted.numpy()
-            else:
-                return outputs.numpy().squeeze()
+    def __getattr__(self, name):
+        return getattr(self._model, name)
