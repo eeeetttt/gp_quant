@@ -1,14 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch",
-      "WebFetch(domain:tushare.pro)",
-      "Bash(conda create:*)",
-      "Bash(conda activate:*)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
       "Bash(pip install:*)",
-      "Bash(git config:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(python:*)",
+      "Bash(grep -E '\\(PASSED|FAILED|ERROR|passed|failed|warnings$\\)')"
     ]
   }
 }

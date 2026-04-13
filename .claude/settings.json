@@ -1,10 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python temp/test_full.py)",
-      "Bash(python -c \"import sys; print\\(sys.path\\)\")",
-      "Bash(python temp/test_data.py)",
-      "Bash(python -c \"import sys; sys.path.insert\\(0, 'src'\\); from gp_quant.strategy.indicators import TechnicalIndicators; print\\('OK'\\)\")"
+      "Bash(git commit -m ':*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/et/program/gp-quant",
+      "/Users/et/program/gp-quant/experiments/data/cleaned"
     ]
   }
 }

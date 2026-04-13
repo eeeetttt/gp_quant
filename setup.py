@@ -10,6 +10,7 @@ setup(
     install_requires=[
         "pandas>=2.0.3",
         "numpy>=1.24.3",
+        "baostock>=0.8.8",
         "akshare>=1.14.0",
         "pydantic>=2.0.0",
         "scikit-learn>=1.3.0",
