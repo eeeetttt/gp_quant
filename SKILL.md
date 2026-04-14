@@ -1,55 +1,63 @@
 ---
 name: gp-quant
-description: A股量化交易框架 — 数据获取、技术指标、策略回测、机器学习、交易调度
+description: A股量化交易框架 — 获取最新行情，计算技术指标，用训练好的模型预测涨跌方向，输出买卖建议
 ---
 
-## gp-quant 实战流程
+## 调用方式（推理模式）
 
-### 1. 数据获取
+给定股票代码，获取最新数据，用训练好的模型预测涨跌方向。
+
 ```bash
-python experiments/fetch_pool.py
-```
-- 从 `experiments/data/stock_pool.txt` 读取股票代码
-- 使用 baostock 拉取前复权日线（OHLCV）
-- 输出：`experiments/data/stock_pool_1y.csv`
+# 单只股票预测
+python experiments/predict_single.py 600519
 
-### 2. 数据清洗
+# 批量预测（从股票池）
+python experiments/predict_batch.py
+```
+
+输出：JSON，包含预测方向、置信度、技术指标信号、买卖建议。
+
+## 训练流程（开发者用）
+
 ```bash
-python experiments/clean_data.py
+# 0. 选股 → experiments/data/stock_pool.txt
+python pipeline/step0_screen.py
+
+# 1. 数据获取 — baostock 拉取前复权日线
+python pipeline/step1_fetch.py
+
+# 2. 数据清洗 — 去空值/停牌剔除/OHLC 一致性/多周期收益率
+python pipeline/step2_clean.py
+
+# 3. 技术指标 — MA/MACD/RSI/布林带/ATR/ADX 等 24 个指标
+python pipeline/step3_indicators.py
+
+# 4. 特征工程 — 价格特征/滞后特征/大盘基准/相对强弱/资金流/时间/动量
+python pipeline/step4_features.py
+
+# 5. 模型训练 — scikit-learn 分类（涨跌方向，股票级别 OOS 切分）
+python pipeline/step5_train_baseline.py
+
+# 6. 回测验证 — 用历史数据验证模型预测准确率、夏普、回撤
+python pipeline/step6_backtest.py
 ```
-- 按 symbol 分组清洗：去空值/去重/OHLC 一致性检查/停牌剔除/异常值过滤
-- 计算衍生列：涨跌幅、多周期收益率
-- 输出：`experiments/data/cleaned/<symbol>.csv`（独立）+ `cleaned_pool.csv`（合并）
 
-### 3. 技术指标
-```bash
-python experiments/calc_indicators.py
-```
-- 计算 24 个指标：MA/MACD/RSI/布林带/ATR/ADX/Stochastic/CCI/WR/OBV/MFI/成交量比率/波动率
-- 输出：`experiments/data/indicators/<symbol>.csv` + `indicators_pool.csv`
-
-### 4. 策略 + 回测
-- 基于指标信号构建策略（MACD 金叉/RSI 超卖等）
-- 回测引擎输出：胜率/夏普/最大回撤/盈亏比
-
-### 5. 特征工程 + 模型训练
-- 自动生成价格特征、滞后特征、技术指标特征
-- scikit-learn 分类（涨跌方向）或回归（收益率）
-
-### 6. 交易调度
-- 风控配置 / 仓位 sizing / 模拟执行
+训练产出：`models/model.pkl`（供推理使用）+ 回测报告
 
 ## 项目结构
 ```
-src/gp_quant/
-├── data/           # 数据层 (fetcher/processor/storage)
-├── strategy/       # 策略层 (base/indicators)
-├── backtest/       # 回测引擎
-├── ml/             # 机器学习 (features/trainer/model/predictor)
-└── harness/        # 交易调度 (risk/sizing/execution)
+src/gp_quant/          # 框架核心代码
+  ├── data/            # 数据层 (获取/处理/存储)
+  ├── strategy/        # 技术指标
+  ├── backtest/        # 回测引擎
+  ├── ml/              # 特征工程/训练/预测
+  └── harness/         # 交易调度 (风控/仓位/执行)
 
-experiments/        # 实战脚本
-tests/              # 单元测试
+pipeline/              # 训练流程脚本（step0 → step6）
+scripts/               # 调试/检查脚本
+models/                # 训练好的模型文件
+tests/                 # 单元测试（conftest + test_*.py）
+experiments/           # 数据/中间结果（.gitignore 忽略）
 ```
 
 详细流程见 [WORKFLOW.md](WORKFLOW.md)。

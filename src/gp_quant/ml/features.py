@@ -132,8 +132,8 @@ class FeatureEngineer:
         df = df.copy()
         horizon = self.config.target_horizon
 
-        # 未来 N 日收益率
-        df.loc[:, f"target_{horizon}d"] = df["close"].pct_change(horizon)
+        # 未来 N 日收益率（向前看，不是向后看！）
+        df.loc[:, f"target_{horizon}d"] = (df["close"].shift(-horizon) - df["close"]) / df["close"] * 100
 
         # 方向标签 (0: 下跌，1: 上涨)
         df.loc[:, f"target_direction_{horizon}d"] = (df[f"target_{horizon}d"] > 0).astype(int)
@@ -265,8 +265,9 @@ class FeatureEngineer:
         """
         warnings = []
 
-        # 检查常数特征
-        for col in df.columns:
+        # 检查常数特征（只检查数值列）
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
             if df[col].std() == 0:
                 warnings.append(f"Constant feature: {col}")
 
