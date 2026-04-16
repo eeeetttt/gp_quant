@@ -7,6 +7,7 @@ Phase 3: 技术指标计算
 """
 import sys
 import os
+import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import logging
@@ -18,6 +19,12 @@ from gp_quant.strategy.indicators import TechnicalIndicators
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+parser = argparse.ArgumentParser(description="技术指标计算")
+parser.add_argument("--pool", choices=["small", "500", "full"], default="small",
+                    help="股票池: small=30只, 500=500只, full=5502只")
+args = parser.parse_args()
+# Note: --pool accepted for CLI consistency. Input is always cleaned_pool.csv (from step2).
 
 CLEANED_PATH = os.path.join(os.path.dirname(__file__), "data", "cleaned_pool.csv")
 IND_DIR = os.path.join(os.path.dirname(__file__), "data", "indicators")

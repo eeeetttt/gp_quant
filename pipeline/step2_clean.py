@@ -7,7 +7,9 @@
 """
 import sys
 import os
+import argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import logging
 
@@ -17,7 +19,14 @@ import numpy as np
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-RAW_PATH = os.path.join(os.path.dirname(__file__), "data", "stock_pool_1y.csv")
+parser = argparse.ArgumentParser(description="数据清洗")
+parser.add_argument("--pool", choices=["small", "500", "full"], default="small",
+                    help="股票池: small=30只, 500=500只, full=5502只")
+args = parser.parse_args()
+
+from pipeline.utils import get_pool_input_path
+
+RAW_PATH = get_pool_input_path(args.pool)
 CLEANED_DIR = os.path.join(os.path.dirname(__file__), "data", "cleaned")
 MERGED_PATH = os.path.join(os.path.dirname(__file__), "data", "cleaned_pool.csv")
 

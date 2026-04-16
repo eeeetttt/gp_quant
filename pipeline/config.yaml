@@ -1,0 +1,70 @@
+# gp-quant 训练配置
+# 修改参数后直接运行，无需改代码
+
+# ── 目标定义 ──
+target:
+  buy_threshold: 4.0    # 未来 N 天收益 >= 4% 为买入信号
+  sell_threshold: -5.0  # 未来 N 天收益 <= -5% 为卖出信号
+  # 中性样本 (-5% ~ 4%) 训练时排除
+
+# ── 模型配置 ──
+models:
+  primary: {}  # 主模型（中周期），空则用全部可用模型
+  auxiliary:
+    short_5d: 5
+  # 完整训练时取消下面注释：
+  # primary:
+  #   mid_10d: 10
+  #   mid_20d: 20
+
+# ── 各模型 Optuna trial 数 ──
+model_trials:
+  mid_10d: 20
+  mid_20d: 20
+  short_5d: 100
+
+# ── 超参搜索空间 ──
+hyperparams:
+  n_estimators:      { type: int,    min: 200,  max: 600,  step: 50 }
+  max_depth:         { type: int,    min: 3,    max: 10 }
+  learning_rate:     { type: float,  min: 0.005, max: 0.1,  log: true }
+  num_leaves:        { type: int,    min: 8,    max: 100 }
+  min_child_samples: { type: int,    min: 50,   max: 500 }
+  subsample:         { type: float,  min: 0.4,  max: 1.0 }
+  colsample_bytree:  { type: float,  min: 0.3,  max: 1.0 }
+  reg_alpha:         { type: float,  min: 0.0,  max: 5.0 }
+  reg_lambda:        { type: float,  min: 0.0,  max: 10.0 }
+
+# ── 默认参数（超参搜索失败时的 fallback） ──
+default_params:
+  n_estimators: 300
+  max_depth: 5
+  learning_rate: 0.05
+  num_leaves: 31
+  min_child_samples: 100
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+
+# ── 去冗余特征（corr=1.0 重复项） ──
+duplicate_features:
+  - wr                 # = k (Stochastic 重复)
+  - volatility_annual  # = volatility
+  - market_return_1d   # ≈ -alpha_1d
+  - market_return_5d   # ≈ -alpha_5d
+
+# ── 回测配置 ──
+backtest:
+  stop_loss: -0.05      # 止损 -5%
+  take_profit: 0.04     # 止盈 +4%
+  max_hold_days: 20     # 最大持有 20 天
+  max_positions: 5      # 最大同时持仓
+  commission: 0.001     # 单边佣金 0.1%
+  stamp_duty: 0.001     # 卖出印花税 0.1%
+
+# ── 数据池 ──
+pool_expected_stocks:
+  small: 30
+  "500": 400
+  full: 4000

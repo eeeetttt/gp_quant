@@ -252,9 +252,11 @@ def run_screening(use_full_market: bool = True):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="A 股选股器")
-    parser.add_argument("--full", action="store_true", help="全 A 股筛选（默认）")
-    parser.add_argument("--pool", action="store_true", help="使用已有股票池")
+    parser = argparse.ArgumentParser(description="A 股选股器\n\n股票池: small=30只, 500=500只, full=全A股筛选(默认)")
+    parser.add_argument("--pool", choices=["small", "500", "full"], default="full",
+                        help="股票池: small=30只, 500=500只, full=全A股筛选")
     args = parser.parse_args()
 
-    run_screening(use_full_market=args.full or not args.pool)
+    # step0 使用 full（全市场筛选），small/500 用已有池子
+    use_full_market = args.pool == "full"
+    run_screening(use_full_market=use_full_market)

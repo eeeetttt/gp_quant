@@ -14,6 +14,9 @@ class FeatureConfig:
     """特征配置"""
     target_column: str = "close"
     target_horizon: int = 5  # 预测未来 N 日收益率
+    target_mode: str = "direction"  # "direction" | "threshold" | "quantile"
+    target_threshold: float = 2.0  # 阈值模式下的阈值（%）
+    target_quantile_top: float = 0.30  # 分位数模式下 top/bottom 比例
     train_ratio: float = 0.8
     use_lag_features: bool = True
     use_technical_indicators: bool = True
@@ -135,8 +138,14 @@ class FeatureEngineer:
         # 未来 N 日收益率（向前看，不是向后看！）
         df.loc[:, f"target_{horizon}d"] = (df["close"].shift(-horizon) - df["close"]) / df["close"] * 100
 
-        # 方向标签 (0: 下跌，1: 上涨)
-        df.loc[:, f"target_direction_{horizon}d"] = (df[f"target_{horizon}d"] > 0).astype(int)
+        if self.config.target_mode == "threshold":
+            # 阈值模式：涨跌幅超过阈值才算涨
+            df.loc[:, f"target_direction_{horizon}d"] = (
+                df[f"target_{horizon}d"] > self.config.target_threshold
+            ).astype(int)
+        else:
+            # 默认方向模式
+            df.loc[:, f"target_direction_{horizon}d"] = (df[f"target_{horizon}d"] > 0).astype(int)
 
         return df
 

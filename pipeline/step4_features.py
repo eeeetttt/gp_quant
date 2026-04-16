@@ -7,6 +7,8 @@ Phase 4: 特征工程
 - 资金流（量价配合/换手率/资金净流入）
 - 时间特征（月份/星期/月初月末）
 - 价格动量（N日高低点位置/趋势强度）
+- 截面排名（个股在全市场中的相对位置）
+- 截面分位数目标（top 30% vs bottom 30%）
 - 特征去冗余（剔除高度相关的重复特征）
 
 输入：experiments/data/indicators_pool.csv
@@ -16,23 +18,40 @@ Phase 4: 特征工程
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import logging
 import json
+import argparse
 
 import pandas as pd
 import numpy as np
 import baostock as bs
+import matplotlib
+matplotlib.use('Agg')  # 无头渲染
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from gp_quant.ml.features import FeatureEngineer, FeatureConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+parser = argparse.ArgumentParser(description="特征工程")
+parser.add_argument("--pool", choices=["small", "500", "full"], default="small")
+args = parser.parse_args()
+
+from pipeline.utils import get_pool_input_path
+
+# Note: --pool accepted for CLI consistency. Input is always indicators_pool.csv (from step3).
+
 INDICATORS_PATH = os.path.join(os.path.dirname(__file__), "data", "indicators_pool.csv")
 ML_DIR = os.path.join(os.path.dirname(__file__), "ml")
 FEATURES_PATH = os.path.join(ML_DIR, "features.csv")
 REPORT_PATH = os.path.join(ML_DIR, "feature_report.json")
+
+CORR_REPORT_PATH = os.path.join(ML_DIR, "correlation_report.json")
+CORR_HEATMAP_PATH = os.path.join(ML_DIR, "feature_correlation.png")
 
 INDEX_CODE = "sh.000001"  # 上证指数
 
@@ -70,7 +89,8 @@ def add_market_features(df: pd.DataFrame, market_df: pd.DataFrame) -> pd.DataFra
 
     for dcol in ['market_return_1d', 'market_return_5d', 'market_vol_change', 'close']:
         map_dict = dict(zip(market_df['date'], market_df[dcol]))
-        df[dcol] = df['date'].map(map_dict)
+        col_name = f'market_{dcol}' if dcol == 'close' else dcol
+        df[col_name] = df['date'].map(map_dict)
 
     # 相对强弱（个股超额收益 vs 大盘）
     df['alpha_1d'] = df['return_1d'] - df['market_return_1d']
@@ -156,6 +176,199 @@ def remove_redundant_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_cross_sectional_ranks(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    截面排名：每日计算每只股票在全市场中的百分位排名。
+    新增 5 个特征，值域 [0, 100]。
+    """
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+
+    rank_columns = {
+        'rank_rsi': 'rsi',
+        'rank_return_5d': 'return_5d',
+        'rank_vol_ratio': 'vol_ratio',
+        'rank_turnover': 'turnover_ratio',
+        'rank_momentum': 'trend_strength_20d',
+    }
+
+    for rank_col, src_col in rank_columns.items():
+        if src_col not in df.columns:
+            logger.warning("  缺少列 %s，跳过截面排名 %s", src_col, rank_col)
+            continue
+        df[rank_col] = df.groupby('date')[src_col].transform(
+            lambda x: x.rank(pct=True) * 100
+        )
+
+    return df
+
+
+def add_quantile_target(df: pd.DataFrame, horizon: int = 5, top_pct: float = 0.30) -> pd.DataFrame:
+    """
+    截面分位数目标：
+    - 每天 top_pct 的股票 → 1（买入信号）
+    - 每天 bottom_pct 的股票 → 0（卖出信号）
+    - 中间部分 → -1（中性，训练时排除）
+    """
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+
+    # 未来 N 日收益率
+    df[f'future_{horizon}d_ret'] = (
+        df.groupby('symbol')['close'].transform(lambda x: x.shift(-horizon))
+        - df['close']
+    ) / df['close'] * 100
+
+    def label_quantile(x):
+        try:
+            return pd.qcut(x, q=[0, top_pct, 1.0 - top_pct, 1.0], labels=[0, -1, 1]).astype(float)
+        except (ValueError, KeyError):
+            # 样本太少或值相同，无法分位
+            return pd.Series(-1, index=x.index, dtype=float)
+
+    df[f'target_quantile_{horizon}d'] = df.groupby('date')[f'future_{horizon}d_ret'].transform(label_quantile)
+
+    return df
+
+
+def analyze_feature_correlation(df, feature_cols, target_col="target_5d",
+                                 corr_threshold=0.85, max_samples=100000):
+    """
+    特征相关性分析：
+    1. 特征-特征相关矩阵（Spearman，捕获非线性关系）
+    2. 高相关特征对（|corr| > threshold），建议剔除
+    3. 特征-目标相关性（找出最有预测力的特征）
+    4. 热力图可视化
+    5. 报告 JSON
+    """
+    logger.info("开始特征相关性分析...")
+
+    # 采样加速（1M+ 行算相关性太慢）
+    if len(df) > max_samples:
+        sample_df = df.sample(n=max_samples, random_state=42).copy()
+        logger.info("  数据采样: %d → %d 行", len(df), len(sample_df))
+    else:
+        sample_df = df.copy()
+
+    # 只取数值特征
+    numeric_cols = [c for c in feature_cols if c in sample_df.columns
+                    and sample_df[c].dtype in ['float64', 'float32', 'int64', 'int32']
+                    and sample_df[c].nunique() > 2]
+
+    # 剔除目标列和中间计算列
+    exclude = {'target_5d', 'target_direction_5d', 'target_quantile_5d',
+               'future_5d_ret', 'vol_up', 'vol_down',
+               'is_month_start', 'is_month_end'}
+    numeric_cols = [c for c in numeric_cols if c not in exclude]
+
+    # 去 NaN
+    feat_df = sample_df[numeric_cols].dropna()
+    if len(feat_df) < 100:
+        logger.warning("  有效样本不足，跳过相关性分析")
+        return
+
+    logger.info("  特征数: %d, 有效样本: %d", len(numeric_cols), len(feat_df))
+
+    # 1. 特征-特征相关矩阵
+    corr_matrix = feat_df.corr(method='spearman')
+
+    # 2. 高相关特征对
+    high_corr_pairs = []
+    seen = set()
+    for i in range(len(corr_matrix.columns)):
+        for j in range(i + 1, len(corr_matrix.columns)):
+            c1, c2 = corr_matrix.columns[i], corr_matrix.columns[j]
+            corr_val = corr_matrix.iloc[i, j]
+            if abs(corr_val) > corr_threshold and (c1, c2) not in seen:
+                seen.add((c1, c2))
+                seen.add((c2, c1))
+                high_corr_pairs.append({
+                    "feature1": c1,
+                    "feature2": c2,
+                    "correlation": round(float(corr_val), 4),
+                })
+    high_corr_pairs.sort(key=lambda x: abs(x['correlation']), reverse=True)
+
+    logger.info("  高相关特征对 (|corr| > %.2f): %d 对", corr_threshold, len(high_corr_pairs))
+
+    # 3. 特征-目标相关性
+    feat_target_corr = {}
+    top_pos = []
+    top_neg = []
+    if target_col in sample_df.columns:
+        target_series = sample_df[target_col].dropna()
+        # 取共同索引
+        common_idx = feat_df.index.intersection(target_series.index)
+        if len(common_idx) > 100:
+            for col in numeric_cols:
+                c = feat_df.loc[common_idx, col].corr(target_series.loc[common_idx], method='spearman')
+                feat_target_corr[col] = round(float(c), 4)
+
+            feat_target_sorted = sorted(feat_target_corr.items(), key=lambda x: abs(x[1]), reverse=True)
+            top_pos = [(c, v) for c, v in feat_target_sorted if v > 0][:15]
+            top_neg = [(c, v) for c, v in feat_target_sorted if v < 0][:15]
+    else:
+        feat_target_corr = {}
+        top_pos = []
+        top_neg = []
+
+    logger.info("  最强正向特征 (Top 5):")
+    for c, v in top_pos[:5]:
+        logger.info("    %-35s corr=%.4f", c, v)
+    logger.info("  最强负向特征 (Top 5):")
+    for c, v in top_neg[:5]:
+        logger.info("    %-35s corr=%.4f", c, v)
+
+    # 4. 热力图（只取 Top 30 最强相关的特征，否则图太密）
+    try:
+        top_n = min(30, len(numeric_cols))
+        all_sorted = sorted(feat_target_corr.items(), key=lambda x: abs(x[1]), reverse=True) if feat_target_corr else []
+        top_features = [c for c, v in all_sorted[:top_n]]
+        if len(top_features) < top_n:
+            # 如果相关特征不足，用前面的补充
+            remaining = [c for c in numeric_cols[:top_n] if c not in top_features]
+            top_features.extend(remaining)
+
+        plot_df = feat_df[top_features].copy()
+        if target_col in sample_df.columns:
+            target_for_plot = sample_df[target_col].dropna()
+            common = plot_df.index.intersection(target_for_plot.index)
+            if len(common) > 100:
+                plot_df[target_col] = target_for_plot.loc[common]
+
+        corr_sub = plot_df.corr(method='spearman')
+
+        plt.figure(figsize=(16, 14))
+        sns.heatmap(corr_sub, cmap='RdBu_r', center=0, annot=False,
+                    square=True, linewidths=0.5, cbar_kws={'shrink': 0.8})
+        plt.title('Feature Correlation Matrix (Spearman) — Top 30 vs Target', fontsize=14, pad=15)
+        plt.xticks(rotation=45, ha='right', fontsize=8)
+        plt.yticks(fontsize=8)
+        plt.tight_layout()
+        plt.savefig(CORR_HEATMAP_PATH, dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info("  热力图已保存: %s", CORR_HEATMAP_PATH)
+    except Exception as e:
+        logger.warning("  热力图生成失败: %s", e)
+
+    # 5. 保存报告
+    corr_report = {
+        "threshold": corr_threshold,
+        "n_features_analyzed": len(numeric_cols),
+        "n_samples_used": len(feat_df),
+        "high_correlation_pairs": high_corr_pairs[:50],  # 只保留前 50 对
+        "n_high_corr_pairs_total": len(high_corr_pairs),
+        "feature_target_correlation": dict(feat_target_corr),
+        "top_positive_features": [{"feature": c, "correlation": v} for c, v in top_pos],
+        "top_negative_features": [{"feature": c, "correlation": v} for c, v in top_neg],
+        "heatmap_path": CORR_HEATMAP_PATH,
+    }
+
+    with open(CORR_REPORT_PATH, 'w') as f:
+        json.dump(corr_report, f, indent=2, ensure_ascii=False, default=str)
+    logger.info("  报告已保存: %s", CORR_REPORT_PATH)
+
+
 def build_features():
     os.makedirs(ML_DIR, exist_ok=True)
 
@@ -216,6 +429,14 @@ def build_features():
 
     merged = pd.concat(feature_frames, ignore_index=True)
 
+    # 截面排名特征（需要全市场数据）
+    logger.info("计算截面排名特征...")
+    merged = add_cross_sectional_ranks(merged)
+
+    # 截面分位数目标
+    logger.info("计算截面分位数目标...")
+    merged = add_quantile_target(merged, horizon=5, top_pct=0.30)
+
     # 报告
     feature_cols = [c for c in merged.columns if c not in ['symbol', 'date', 'close']]
     report = {
@@ -235,6 +456,7 @@ def build_features():
             "时间特征": [c for c in feature_cols if c in ['month', 'day_of_week', 'is_month_start', 'is_month_end', 'quarter']],
             "资金流": [c for c in feature_cols if c.startswith('moneyflow_') or c.startswith('vol_up') or c.startswith('vol_down') or c == 'turnover_ratio'],
             "动量特征": [c for c in feature_cols if 'position_' in c or 'trend_' in c or 'slope_' in c],
+            "截面排名": [c for c in feature_cols if c.startswith('rank_')],
         },
         "target_columns": [c for c in merged.columns if c.startswith('target')],
         "validation_warnings": all_warnings[:10],
@@ -245,6 +467,9 @@ def build_features():
         json.dump(report, f, indent=2, ensure_ascii=False, default=str)
 
     merged.to_csv(FEATURES_PATH, index=False)
+
+    # 相关性分析
+    analyze_feature_correlation(merged, feature_cols, target_col="target_5d")
 
     logger.info("=" * 50)
     logger.info("特征工程完成!")
