@@ -16,6 +16,9 @@ models/
 experiments/
 pipeline/data/
 pipeline/models/
+pipeline/ml/
+pipeline/results/
+tests/
 
 # IDE
 .idea/
