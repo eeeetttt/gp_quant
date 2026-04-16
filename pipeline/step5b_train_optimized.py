@@ -171,8 +171,7 @@ def train_optimized():
             n_estimators=300, max_depth=6, learning_rate=0.05,
             min_child_weight=50, subsample=0.8, colsample_bytree=0.6,
             scale_pos_weight=scale_pos,
-            random_state=42, n_jobs=-1, eval_metric='logloss',
-            use_label_encoder=False
+            random_state=42, n_jobs=-1, eval_metric='logloss'
         ),
         "LightGBM": lgb.LGBMClassifier(
             n_estimators=300, max_depth=6, learning_rate=0.05,

@@ -34,11 +34,24 @@ TARGET_COL = "target_direction_5d"
 PROB_THRESHOLD = 0.50
 
 
-def walk_forward_test(df, feature_cols, scaler, model, n_splits=5):
+def _get_features(df, feature_cols, scaler=None):
+    """Get features, applying scaler only if available and fitted"""
+    X = df[feature_cols].values
+    if scaler is not None:
+        return scaler.transform(X)
+    return X
+
+
+def walk_forward_test(df, feature_cols, scaler, model, n_splits=5,
+                      lgb_model=None, xgb_model=None):
     """
     Walk-forward 验证：
     将数据按时间分成 n_splits 段
-    每轮：用前 N-1 段训练，第 N 段测试
+    每轮：使用已保存的模型直接在测试集上预测（不重新训练）
+
+    支持两种模型格式：
+    - 旧版: scaler + model (single sklearn model)
+    - 新版: lgb_model + xgb_model (LGB+XGB ensemble)
     """
     df = df.sort_values('date').reset_index(drop=True)
     dates = df['date'].unique()
@@ -47,40 +60,34 @@ def walk_forward_test(df, feature_cols, scaler, model, n_splits=5):
     results = []
 
     for split in range(n_splits):
-        # 训练集：split 之前的所有数据
-        train_end = dates[(split) * split_size]
-        # 测试集：下一段
-        test_start = dates[(split) * split_size]
+        test_start = dates[split * split_size]
         test_end = dates[(split + 1) * split_size] if split + 1 < n_splits else dates[-1]
 
-        train_df = df[df['date'] < test_start].copy()
         test_df = df[(df['date'] >= test_start) & (df['date'] < test_end)].copy()
 
-        if len(train_df) < 1000 or len(test_df) < 100:
+        if len(test_df) < 100:
             continue
 
-        train_df = train_df.dropna(subset=feature_cols + [TARGET_COL])
         test_df = test_df.dropna(subset=feature_cols + [TARGET_COL])
+        if test_df.empty:
+            continue
 
-        X_train = scaler.transform(train_df[feature_cols].values)
-        y_train = train_df[TARGET_COL].values
-        X_test = scaler.transform(test_df[feature_cols].values)
+        X_test = _get_features(test_df, feature_cols, scaler)
         y_test = test_df[TARGET_COL].values
 
-        # 在新数据上训练一个临时模型
-        import lightgbm as lgb
-        n_pos = y_train.sum()
-        n_neg = len(y_train) - n_pos
-        tmp_model = lgb.LGBMClassifier(
-            n_estimators=300, max_depth=6, learning_rate=0.05,
-            num_leaves=31, min_child_samples=50, subsample=0.8,
-            colsample_bytree=0.6, scale_pos_weight=n_neg / max(n_pos, 1),
-            random_state=42, n_jobs=-1, verbose=-1
-        )
-        tmp_model.fit(X_train, y_train)
+        # 使用已保存模型预测（不重新训练）
+        if lgb_model is not None and xgb_model is not None:
+            # 新版：LGB+XGB ensemble
+            p_lgb = lgb_model.predict_proba(X_test)[:, 1]
+            p_xgb = xgb_model.predict_proba(X_test)[:, 1]
+            y_prob = 0.5 * p_lgb + 0.5 * p_xgb
+        elif model is not None:
+            # 旧版：单模型
+            y_prob = model.predict_proba(X_test)[:, 1]
+        else:
+            continue
 
-        y_pred = tmp_model.predict(X_test)
-        y_prob = tmp_model.predict_proba(X_test)[:, 1]
+        y_pred = (y_prob >= PROB_THRESHOLD).astype(int)
 
         acc = accuracy_score(y_test, y_pred)
         f1 = f1_score(y_test, y_pred, zero_division=0)
@@ -95,7 +102,7 @@ def walk_forward_test(df, feature_cols, scaler, model, n_splits=5):
 
         results.append({
             "split": split + 1,
-            "train_period": f"~{train_end}",
+            "train_period": f"~{test_start}",
             "test_period": f"{test_start}~{test_end}",
             "test_samples": len(test_df),
             "accuracy": round(acc, 4),
@@ -176,7 +183,19 @@ def simulate_trades(df):
     }
 
 
-def per_stock_analysis(df, feature_cols, scaler, model):
+def predict_proba(model, lgb_model, xgb_model, X):
+    """Unified prediction for both model formats"""
+    if lgb_model is not None and xgb_model is not None:
+        p_lgb = lgb_model.predict_proba(X)[:, 1]
+        p_xgb = xgb_model.predict_proba(X)[:, 1]
+        return 0.5 * p_lgb + 0.5 * p_xgb
+    elif model is not None:
+        return model.predict_proba(X)[:, 1]
+    else:
+        raise ValueError("No model available for prediction")
+
+
+def per_stock_analysis(df, feature_cols, scaler, model, lgb_model=None, xgb_model=None):
     """逐只股票分析：检查收益是否集中在少数股票"""
     symbols = sorted(df['symbol'].unique())
     stock_results = {}
@@ -187,9 +206,9 @@ def per_stock_analysis(df, feature_cols, scaler, model):
         if len(stock_df) < 50:
             continue
 
-        X = scaler.transform(stock_df[feature_cols].values)
+        X = _get_features(stock_df, feature_cols, scaler)
         y_true = stock_df[TARGET_COL].values
-        y_prob = model.predict_proba(X)[:, 1]
+        y_prob = predict_proba(model, lgb_model, xgb_model, X)
         y_pred = (y_prob >= PROB_THRESHOLD).astype(int)
 
         acc = accuracy_score(y_true, y_pred)
@@ -225,7 +244,7 @@ def per_stock_analysis(df, feature_cols, scaler, model):
     return stock_results, {"concentration_ratio": round(concentration, 4)}
 
 
-def oos_backtest(df, feature_cols, scaler, model, unseen_symbols):
+def oos_backtest(df, feature_cols, scaler, model, unseen_symbols, lgb_model=None, xgb_model=None):
     """仅在外样本（未见过的股票）上回测"""
     oos_df = df[df['symbol'].isin(unseen_symbols)].copy()
     oos_df = oos_df.dropna(subset=feature_cols)
@@ -234,9 +253,9 @@ def oos_backtest(df, feature_cols, scaler, model, unseen_symbols):
         logger.warning("无 OOS 数据")
         return {"error": "no_oos_data"}
 
-    X = scaler.transform(oos_df[feature_cols].values)
+    X = _get_features(oos_df, feature_cols, scaler)
     y_true = oos_df[TARGET_COL].values
-    y_prob = model.predict_proba(X)[:, 1]
+    y_prob = predict_proba(model, lgb_model, xgb_model, X)
     y_pred = (y_prob >= PROB_THRESHOLD).astype(int)
 
     acc = accuracy_score(y_true, y_pred)
@@ -264,21 +283,35 @@ def oos_backtest(df, feature_cols, scaler, model, unseen_symbols):
 def check_overfitting():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # 加载模型
-    logger.info("加载优化模型: %s", MODEL_PATH)
+    # 加载模型（支持两种格式）
+    logger.info("加载模型: %s", MODEL_PATH)
     model_data = joblib.load(MODEL_PATH)
-    model = model_data['model']
-    scaler = model_data['scaler']
-    feature_cols = model_data['feature_cols']
-    threshold = model_data.get('threshold', 0.50)
-    model_type = model_data.get('model_type', str(type(model).__name__))
+    model_type = model_data.get('model_type', str(type(model_data.get('model', 'unknown'))))
 
-    logger.info("模型: %s, 阈值: %.2f, 特征: %d", model_type, threshold, len(feature_cols))
+    # 新版格式：lgb_model + xgb_model
+    lgb_model = model_data.get('lgb_model')
+    xgb_model = model_data.get('xgb_model')
+    feature_cols = model_data.get('feature_cols', [])
+
+    # 旧版格式：model + scaler
+    model = model_data.get('model')
+    scaler = model_data.get('scaler')
+    threshold = model_data.get('threshold', 0.50)
+
+    # 如果没有 scaler（新版），设为None，_get_features会直接用原始特征
+    if scaler is None and feature_cols:
+        logger.info("新版模型格式，无scaler，使用原始特征")
+
+    logger.info("模型: %s, 特征: %d, LGB=%s, XGB=%s",
+                 model_type, len(feature_cols), lgb_model is not None, xgb_model is not None)
 
     # 加载数据
     logger.info("加载特征数据...")
     df = pd.read_csv(FEATURES_PATH, dtype={'symbol': str})
     df = df.dropna(subset=feature_cols + [TARGET_COL])
+    if df.empty:
+        logger.error("特征数据过滤后为空")
+        return
 
     symbols = sorted(df['symbol'].unique())
     np.random.seed(42)
@@ -296,9 +329,13 @@ def check_overfitting():
         "n_unseen_stocks": len(unseen_symbols),
     }
 
-    # 1. Walk-forward 验证
+    # 1. Walk-forward 验证（使用已保存模型，不重新训练）
     logger.info("\n=== 1. Walk-Forward 验证 ===")
-    wf_results = walk_forward_test(df, feature_cols, scaler, model, n_splits=5)
+    wf_results = walk_forward_test(
+        df, feature_cols, scaler, model,
+        n_splits=5,
+        lgb_model=lgb_model, xgb_model=xgb_model
+    )
     report["walk_forward"] = wf_results
 
     # 检查 walk-forward 性能趋势
@@ -328,12 +365,14 @@ def check_overfitting():
 
     # 2. OOS 股票回测
     logger.info("\n=== 2. OOS 股票回测 ===")
-    oos_results = oos_backtest(df, feature_cols, scaler, model, unseen_symbols)
+    oos_results = oos_backtest(df, feature_cols, scaler, model, unseen_symbols,
+                                lgb_model=lgb_model, xgb_model=xgb_model)
     report["oos"] = oos_results
 
     # 3. 逐只股票分析
     logger.info("\n=== 3. 逐只股票分析 ===")
-    stock_results, concentration = per_stock_analysis(df, feature_cols, scaler, model)
+    stock_results, concentration = per_stock_analysis(df, feature_cols, scaler, model,
+                                                       lgb_model=lgb_model, xgb_model=xgb_model)
     report["per_stock"] = stock_results
     report["concentration"] = concentration
 
@@ -352,64 +391,70 @@ def check_overfitting():
     train_df = train_df.dropna(subset=feature_cols + [TARGET_COL])
     test_df = test_df.dropna(subset=feature_cols + [TARGET_COL])
 
-    X_train = scaler.transform(train_df[feature_cols].values)
-    y_train = train_df[TARGET_COL].values
-    X_test = scaler.transform(test_df[feature_cols].values)
-    y_test = test_df[TARGET_COL].values
+    if train_df.empty or test_df.empty:
+        logger.warning("Train/Test 集为空，跳过对比")
+        report["train_vs_test"] = {"error": "empty_data"}
+    else:
+        X_train = _get_features(train_df, feature_cols, scaler)
+        y_train = train_df[TARGET_COL].values
+        X_test = _get_features(test_df, feature_cols, scaler)
+        y_test = test_df[TARGET_COL].values
 
-    train_prob = model.predict_proba(X_train)[:, 1]
-    test_prob = model.predict_proba(X_test)[:, 1]
+        train_prob = predict_proba(model, lgb_model, xgb_model, X_train)
+        test_prob = predict_proba(model, lgb_model, xgb_model, X_test)
 
-    train_acc = accuracy_score(y_train, (train_prob >= threshold).astype(int))
-    test_acc = accuracy_score(y_test, (test_prob >= threshold).astype(int))
-    train_auc = roc_auc_score(y_train, train_prob)
-    test_auc = roc_auc_score(y_test, test_prob)
-    train_f1 = f1_score(y_train, (train_prob >= threshold).astype(int))
-    test_f1 = f1_score(y_test, (test_prob >= threshold).astype(int))
+        train_acc = accuracy_score(y_train, (train_prob >= threshold).astype(int))
+        test_acc = accuracy_score(y_test, (test_prob >= threshold).astype(int))
+        train_auc = roc_auc_score(y_train, train_prob)
+        test_auc = roc_auc_score(y_test, test_prob)
+        train_f1 = f1_score(y_train, (train_prob >= threshold).astype(int))
+        test_f1 = f1_score(y_test, (test_prob >= threshold).astype(int))
 
-    logger.info("  Train: acc=%.4f auc=%.4f f1=%.4f", train_acc, train_auc, train_f1)
-    logger.info("  Test:  acc=%.4f auc=%.4f f1=%.4f", test_acc, test_auc, test_f1)
-    logger.info("  Gap:   acc=%.4f auc=%.4f f1=%.4f",
-                 train_acc - test_acc, train_auc - test_auc, train_f1 - test_f1)
+        logger.info("  Train: acc=%.4f auc=%.4f f1=%.4f", train_acc, train_auc, train_f1)
+        logger.info("  Test:  acc=%.4f auc=%.4f f1=%.4f", test_acc, test_auc, test_f1)
+        logger.info("  Gap:   acc=%.4f auc=%.4f f1=%.4f",
+                     train_acc - test_acc, train_auc - test_auc, train_f1 - test_f1)
 
-    report["train_vs_test"] = {
-        "train_acc": round(train_acc, 4),
-        "test_acc": round(test_acc, 4),
-        "train_auc": round(train_auc, 4),
-        "test_auc": round(test_auc, 4),
-        "train_f1": round(train_f1, 4),
-        "test_f1": round(test_f1, 4),
-        "gap_acc": round(train_acc - test_acc, 4),
-        "gap_auc": round(train_auc - test_auc, 4),
-        "gap_f1": round(train_f1 - test_f1, 4),
-    }
+        report["train_vs_test"] = {
+            "train_acc": round(train_acc, 4),
+            "test_acc": round(test_acc, 4),
+            "train_auc": round(train_auc, 4),
+            "test_auc": round(test_auc, 4),
+            "train_f1": round(train_f1, 4),
+            "test_f1": round(test_f1, 4),
+            "gap_acc": round(train_acc - test_acc, 4),
+            "gap_auc": round(train_auc - test_auc, 4),
+            "gap_f1": round(train_f1 - test_f1, 4),
+        }
 
     # 5. 过拟合综合判断
     logger.info("\n=== 5. 过拟合综合判断 ===")
-    gap = report["train_vs_test"]
-    signals = []
-
-    # AUC gap > 0.1 是危险信号
-    if gap['gap_auc'] > 0.1:
-        signals.append(f"严重过拟合: AUC gap = {gap['gap_auc']:.3f} (> 0.1)")
-    elif gap['gap_auc'] > 0.05:
-        signals.append(f"轻度过拟合: AUC gap = {gap['gap_auc']:.3f} (0.05~0.1)")
+    gap = report.get("train_vs_test", {})
+    if gap.get("error"):
+        signals = ["无法判断：Train/Test 数据为空"]
+        logger.warning("  %s", signals[0])
     else:
-        signals.append(f"无明显过拟合: AUC gap = {gap['gap_auc']:.3f} (< 0.05)")
-
-    # Walk-forward 退化
-    if report.get("wf_trend"):
-        wf = report["wf_trend"]
-        if wf['auc_degradation'] > 0.1:
-            signals.append(f"时间退化严重: AUC 从 {wf['early_auc']} 降到 {wf['late_auc']}")
-        elif wf['auc_degradation'] > 0.03:
-            signals.append(f"时间退化中等: AUC 从 {wf['early_auc']} 降到 {wf['late_auc']}")
+        # AUC gap > 0.1 是危险信号
+        if gap['gap_auc'] > 0.1:
+            signals.append(f"严重过拟合: AUC gap = {gap['gap_auc']:.3f} (> 0.1)")
+        elif gap['gap_auc'] > 0.05:
+            signals.append(f"轻度过拟合: AUC gap = {gap['gap_auc']:.3f} (0.05~0.1)")
         else:
-            signals.append(f"时间退化轻微: AUC 稳定在 {wf['early_auc']}~{wf['late_auc']}")
+            signals.append(f"无明显过拟合: AUC gap = {gap['gap_auc']:.3f} (< 0.05)")
 
-    # 收益集中度
-    if report["concentration"]["concentration_ratio"] > 0.8:
-        signals.append(f"收益高度集中: Top5/Total = {report['concentration']['concentration_ratio']:.2f}")
+        # Walk-forward 退化
+        if report.get("wf_trend"):
+            wf = report["wf_trend"]
+            if wf['auc_degradation'] > 0.1:
+                signals.append(f"时间退化严重: AUC 从 {wf['early_auc']} 降到 {wf['late_auc']}")
+            elif wf['auc_degradation'] > 0.03:
+                signals.append(f"时间退化中等: AUC 从 {wf['early_auc']} 降到 {wf['late_auc']}")
+            else:
+                signals.append(f"时间退化轻微: AUC 稳定在 {wf['early_auc']}~{wf['late_auc']}")
+
+        # 收益集中度
+        if report.get("concentration") and report["concentration"]["concentration_ratio"] > 0.8:
+            signals.append(f"收益高度集中: Top5/Total = {report['concentration']['concentration_ratio']:.2f}")
 
     report["overfit_signals"] = signals
 

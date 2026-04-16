@@ -196,9 +196,7 @@ def add_cross_sectional_ranks(df: pd.DataFrame) -> pd.DataFrame:
         if src_col not in df.columns:
             logger.warning("  缺少列 %s，跳过截面排名 %s", src_col, rank_col)
             continue
-        df[rank_col] = df.groupby('date')[src_col].transform(
-            lambda x: x.rank(pct=True) * 100
-        )
+        df[rank_col] = df.groupby('date')[src_col].rank(pct=True) * 100
 
     return df
 

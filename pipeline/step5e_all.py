@@ -16,7 +16,11 @@ Y 定义：个股独立信号（非截面排名）
 """
 import sys, os, logging, json, warnings, argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-warnings.filterwarnings('ignore')
+
+# 只屏蔽 LightGBM/XGBoost/Optuna 的冗余警告，不全局屏蔽
+warnings.filterwarnings('ignore', category=UserWarning, module='lightgbm')
+warnings.filterwarnings('ignore', category=UserWarning, module='xgboost')
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 import numpy as np
 import pandas as pd
@@ -303,40 +307,6 @@ def walk_forward_eval(df, feature_cols, target_col, n_splits=4, name="",
 
     avg_auc = np.mean([r['auc'] for r in results]) if results else 0.0
     return results, avg_auc, params, models_saved, all_test_dates
-
-
-# ── Hybrid 集成 ──
-def hybrid_evaluate(df_dict, feature_cols, model_dicts, method="weighted"):
-    """
-    多周期 Hybrid 集成
-    df_dict: {model_name: df_with_target}
-    model_dicts: {model_name: [model_pairs_per_split]}
-    method: "weighted" | "vote" | "confirm"
-    """
-    # 取所有模型共同的测试日期范围
-    all_results = {}
-    for name, (wf_res, avg_auc) in model_dicts.items():
-        all_results[name] = {"wf": wf_res, "avg_auc": avg_auc}
-
-    if method == "weighted":
-        # 按 AUC 分配权重
-        total_auc = sum(r['avg_auc'] for r in all_results.values())
-        weights = {k: v['avg_auc'] / total_auc for k, v in all_results.items()}
-        logger.info("  加权权重: %s", {k: round(v, 3) for k, v in weights.items()})
-        return {"method": "weighted", "weights": weights,
-                "combined_auc": round(sum(v['avg_auc'] * w for v, w in zip(all_results.values(), weights.values())), 4)}
-
-    elif method == "vote":
-        avg_aucs = [r['avg_auc'] for r in all_results.values()]
-        logger.info("  简单投票, 各模型 AUC: %s", [round(a, 4) for a in avg_aucs])
-        return {"method": "vote", "avg_auc": round(np.mean(avg_aucs), 4)}
-
-    elif method == "confirm":
-        # 双模型确认：只有 10d 和 20d 同时看多才买入
-        logger.info("  信号确认模式")
-        return {"method": "confirm"}
-
-    return {}
 
 
 # ── 回测（多模型信号） ──

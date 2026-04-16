@@ -62,68 +62,80 @@ def backtest_optimized():
     logger.info("BUY 信号: %d (%.1f%%)", (df['signal'] == 'BUY').sum(),
                 (df['signal'] == 'BUY').mean() * 100)
 
-    # 按股票分组回测
+    # 按日期遍历，强制执行 MAX_POSITIONS 限制
     symbols = sorted(df['symbol'].unique())
-    logger.info("回测 %d 只股票...", len(symbols))
+    logger.info("回测 %d 只股票 (最大持仓 %d)...", len(symbols), MAX_POSITIONS)
 
     all_trades = []
-    positions = {}  # symbol -> {entry_date, entry_price, entry_prob}
+    open_positions = {}  # symbol -> {entry_date, entry_price, entry_prob, entry_idx}
 
-    for symbol in symbols:
-        stock_df = df[df['symbol'] == symbol].sort_values('date').reset_index(drop=True)
-        if len(stock_df) < 10:
+    dates = sorted(df['date'].unique())
+    for date in dates:
+        day_df = df[df['date'] == date]
+        if day_df.empty:
             continue
 
-        in_position = False
-        entry_date = None
-        entry_price = None
-        entry_prob = None
-        entry_idx = None
-
-        for i in range(len(stock_df)):
-            row = stock_df.iloc[i]
-            date = row['date']
-            price = row['close']
-            signal = row['signal']
+        # 先检查已持仓的平仓信号
+        for sym in list(open_positions.keys()):
+            row = day_df[day_df['symbol'] == sym]
+            if row.empty:
+                continue
+            row = row.iloc[0]
             prob = row['prob_up']
+            price = row['close']
+            pos = open_positions[sym]
+            days_held = day_df.index[0] - pos['entry_idx']
 
-            if not in_position and signal == "BUY":
-                # 开仓
-                in_position = True
-                entry_date = date
-                entry_price = price
-                entry_prob = prob
-                entry_idx = i
+            should_sell = (prob < threshold)
+            max_hold = days_held >= 10
 
-            elif in_position:
-                should_sell = (prob < threshold)
-                days_held = i - entry_idx
-                max_hold = days_held >= 10
+            if should_sell or max_hold:
+                pnl_pct = (price - pos['entry_price']) / pos['entry_price'] * 100
+                all_trades.append({
+                    "symbol": sym,
+                    "entry_date": str(pos['entry_date']),
+                    "exit_date": str(date),
+                    "entry_price": round(float(pos['entry_price']), 4),
+                    "exit_price": round(float(price), 4),
+                    "entry_prob": round(float(pos['entry_prob']), 4),
+                    "exit_prob": round(float(prob), 4),
+                    "pnl_pct": round(float(pnl_pct), 4),
+                    "is_win": bool(pnl_pct > 0),
+                    "days_held": int(days_held),
+                })
+                del open_positions[sym]
 
-                if should_sell or max_hold or i == len(stock_df) - 1:
-                    exit_price = price
-                    exit_date = date
-                    pnl_pct = (exit_price - entry_price) / entry_price * 100
-                    is_win = pnl_pct > 0
+        # 再处理新买入信号
+        buy_signals = day_df[day_df['signal'] == 'BUY'].sort_values('prob_up', ascending=False)
+        for _, row in buy_signals.iterrows():
+            if len(open_positions) >= MAX_POSITIONS:
+                break
+            sym = row['symbol']
+            if sym not in open_positions:
+                open_positions[sym] = {
+                    'entry_date': date,
+                    'entry_price': row['close'],
+                    'entry_prob': row['prob_up'],
+                    'entry_idx': day_df.index[0],
+                }
 
-                    all_trades.append({
-                        "symbol": symbol,
-                        "entry_date": str(entry_date),
-                        "exit_date": str(exit_date),
-                        "entry_price": round(float(entry_price), 4),
-                        "exit_price": round(float(exit_price), 4),
-                        "entry_prob": round(float(entry_prob), 4),
-                        "exit_prob": round(float(prob), 4),
-                        "pnl_pct": round(float(pnl_pct), 4),
-                        "is_win": bool(is_win),
-                        "days_held": int(days_held),
-                    })
-
-                    in_position = False
-                    entry_date = None
-                    entry_price = None
-                    entry_prob = None
-                    entry_idx = None
+    # 清算剩余持仓
+    for sym, pos in open_positions.items():
+        stock_df = df[df['symbol'] == sym].sort_values('date')
+        last_row = stock_df.iloc[-1]
+        pnl_pct = (last_row['close'] - pos['entry_price']) / pos['entry_price'] * 100
+        all_trades.append({
+            "symbol": sym,
+            "entry_date": str(pos['entry_date']),
+            "exit_date": str(last_row['date']),
+            "entry_price": round(float(pos['entry_price']), 4),
+            "exit_price": round(float(last_row['close']), 4),
+            "entry_prob": round(float(pos['entry_prob']), 4),
+            "exit_prob": round(float(last_row['prob_up']), 4),
+            "pnl_pct": round(float(pnl_pct), 4),
+            "is_win": bool(pnl_pct > 0),
+            "days_held": int(len(stock_df) - 1 - pos['entry_idx']),
+        })
 
     # 计算指标
     total_trades = len(all_trades)

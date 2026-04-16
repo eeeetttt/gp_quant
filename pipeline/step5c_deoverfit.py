@@ -298,8 +298,7 @@ def train_deoverfit():
                 n_estimators=300, max_depth=4, learning_rate=0.02,
                 min_child_weight=200, subsample=0.6, colsample_bytree=0.4,
                 reg_alpha=1.0, reg_lambda=2.0,
-                random_state=42, n_jobs=-1, eval_metric='logloss',
-                use_label_encoder=False
+                random_state=42, n_jobs=-1, eval_metric='logloss'
             )
         },
         "XGB_v2": {
@@ -308,8 +307,7 @@ def train_deoverfit():
                 n_estimators=500, max_depth=3, learning_rate=0.01,
                 min_child_weight=300, subsample=0.5, colsample_bytree=0.3,
                 reg_alpha=2.0, reg_lambda=5.0,
-                random_state=42, n_jobs=-1, eval_metric='logloss',
-                use_label_encoder=False
+                random_state=42, n_jobs=-1, eval_metric='logloss'
             )
         },
     }

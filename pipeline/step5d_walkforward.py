@@ -140,7 +140,7 @@ def build_walkforward_models(df, candidate_features, n_windows=5):
             min_child_weight=200, subsample=0.6, colsample_bytree=0.4,
             reg_alpha=1.0, reg_lambda=2.0,
             scale_pos_weight=scale, random_state=42, n_jobs=-1,
-            eval_metric='logloss', use_label_encoder=False
+            eval_metric='logloss'
         )
 
         lgb_model.fit(X_train, y_train)
