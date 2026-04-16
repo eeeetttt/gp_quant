@@ -28,6 +28,7 @@ tests/
 .DS_Store
 
 # Claude Code settings (personal)
+.claude/settings.json
 .claude/settings.local.json
 
 # Environment

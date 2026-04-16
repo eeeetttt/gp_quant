@@ -4,7 +4,24 @@
       "Bash(python -m pytest tests/ -v --tb=short)",
       "Bash(pip install:*)",
       "Bash(python:*)",
-      "Bash(grep -E '\\(PASSED|FAILED|ERROR|passed|failed|warnings$\\)')"
+      "Bash(grep -E '\\(PASSED|FAILED|ERROR|passed|failed|warnings$\\)')",
+      "Bash(brew install:*)",
+      "Bash(wc -l pipeline/data/stock_pool*.txt pipeline/data/stock_pool*.csv)",
+      "Bash(python3 -c ':*)",
+      "Bash(npm install:*)",
+      "Read(//Users/et/.claude/skills/gstack/**)",
+      "Bash(./setup)",
+      "Bash(bun install:*)",
+      "Bash(PLAYWRIGHT_DOWNLOAD_HOST=npmmirror.com/mirrors/playwright bunx playwright install chromium)",
+      "Bash(PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright bunx playwright install chromium)",
+      "Bash(python3 -c \"import seaborn; print\\('seaborn', seaborn.__version__\\); import matplotlib; print\\('matplotlib', matplotlib.__version__\\)\")",
+      "Bash(python3 -c \"import seaborn; import matplotlib; print\\('OK'\\)\")",
+      "Read(//private/tmp/xgboost-build/xgboost/**)",
+      "Bash(pip search *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git status *)",
+      "Bash(git ls-tree *)"
     ]
   }
 }
